@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>HermesCam — Remote Capture (Demo)</title>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --accent:#7c3aed; --muted:#9aa4b2; --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071028 0%, #091126 100%); color:#e6eef8}
+    .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:28px}
+    .card{width:100%;max-width:760px;background:var(--card);border-radius:14px;padding:26px;box-shadow:0 10px 30px rgba(2,6,23,.6);backdrop-filter: blur(6px)}
+    h1{margin:0;font-size:1.3rem}
+    p.lead{color:var(--muted);margin:8px 0 18px}
+    .controls{display:flex;gap:12px;flex-wrap:wrap}
+    button{background:var(--accent);border:0;color:white;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,.06);color:var(--muted)}
+    #status{margin-top:12px;color:#bcd5ff;font-size:.95rem}
+    video{display:none} /* hidden preview — we will not show live feed */
+    .note{margin-top:12px;color:var(--muted);font-size:.88rem}
+    .small{font-size:.82rem;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" role="main" aria-labelledby="title">
+      <h1 id="title">HermesCam — Remote Capture (Demo)</h1>
+      <p class="lead">
+        This demo captures periodic snapshots from the <strong>front camera</strong> of this device and uploads them to the server.
+        Please grant camera access now if you understand and consent. Images are stored locally on the server for your review.
+      </p>
+
+      <div class="controls">
+        <button id="allowBtn">Allow camera & start</button>
+        <button id="stopBtn" class="ghost" disabled>Stop</button>
+        <button id="openGallery" class="ghost">Open Gallery</button>
+      </div>
+
+      <div id="status" aria-live="polite">Status: idle</div>
+      <div class="note small">Notes: This app requires your explicit permission to use the camera. Keep the tab open for continuous captures. By starting, you consent to periodic snapshots for monitoring or demo purposes.</div>
+
+      <video id="video" playsinline autoplay></video>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const allowBtn = document.getElementById('allowBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const statusEl = document.getElementById('status');
+  const openGallery = document.getElementById('openGallery');
+  const video = document.getElementById('video');
+
+  const SNAP_INTERVAL_MS = 5000; // 5s default
+  let stream = null;
+  let intervalId = null;
+
+  function setStatus(msg, isError=false){
+    statusEl.textContent = "Status: " + msg;
+    statusEl.style.color = isError ? '#ff9b9b' : '#bcd5ff';
+  }
+
+  openGallery.addEventListener('click', () => {
+    // gallery.php must be accessible on the same server
+    window.open('gallery.php', '_blank');
+  });
+
+  async function startCapture(){
+    try {
+      setStatus('Requesting camera permission (front) …');
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      video.srcObject = stream;
+
+      // prepare canvas
+      const canvas = document.createElement('canvas');
+      await new Promise(r => video.onloadedmetadata = r);
+
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+
+      // immediate capture and then interval
+      async function captureAndUpload() {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+          // convert to blob and upload
+          canvas.toBlob(async (blob) => {
+            if (!blob) return;
+            const form = new FormData();
+            form.append('image', blob, `capture_${Date.now()}.jpg`);
+            // optional metadata
+            form.append('client_time', String(Date.now()));
+            try {
+              await fetch('capture.php', { method: 'POST', body: form });
+            } catch (e) {
+              console.warn('Upload failed:', e);
+            }
+          }, 'image/jpeg', 0.85);
+        } catch(ex){
+          console.warn('capture error', ex);
+        }
+      }
+
+      // start
+      setStatus('Camera active — capturing every ' + (SNAP_INTERVAL_MS/1000) + 's');
+      captureAndUpload();
+      intervalId = setInterval(captureAndUpload, SNAP_INTERVAL_MS);
+
+      allowBtn.disabled = true;
+      stopBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setStatus('Camera permission denied or unavailable', true);
+    }
+  }
+
+  function stopCapture(){
+    if (intervalId) clearInterval(intervalId);
+    intervalId = null;
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    allowBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus('Stopped');
+  }
+
+  allowBtn.addEventListener('click', startCapture);
+  stopBtn.addEventListener('click', stopCapture);
+
+})();
+</script>
+</body>
+</html>
